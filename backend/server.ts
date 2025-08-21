@@ -40,6 +40,8 @@ app.use(bodyParser.urlencoded({ extended: true }));
 interface Text {
   id: number;
   text: string;
+  fileName: string;
+  imageUrl: string;
   timestamp: string;
 }
 
@@ -48,17 +50,29 @@ let texts: Text[] = [];
 
 // TODO: Create a helper config object for each ATXP MCP Server you want to use
 // For example, if you want to use the ATXP Image MCP Server, you can use the following config object:
-// const imageService = {
-//   mcpServer: 'https://image.mcp.atxp.ai',
-//   toolName: 'image_create_image',
-//   description: 'ATXP Image MCP server',
-//   getArguments: (prompt: string) => ({ prompt }),
-//   getResult: (result: any) => {
-//     // Parse the JSON string from the result
-//     const jsonString = result.content[0].text;
-//     return JSON.parse(jsonString);
-//   }
-// };
+const imageService = {
+  mcpServer: 'https://image.mcp.atxp.ai',
+  toolName: 'image_create_image',
+  description: 'ATXP Image MCP server',
+  getArguments: (prompt: string) => ({ prompt }),
+  getResult: (result: any) => {
+    // Parse the JSON string from the result
+    const jsonString = result.content[0].text;
+    return JSON.parse(jsonString);
+  }
+};
+
+const filestoreService = {
+  mcpServer: 'https://filestore.mcp.atxp.ai',
+  toolName: 'filestore_write',
+  description: 'ATXP File Store MCP server',
+  getArguments: (sourceUrl: string) => ({ sourceUrl, makePublic: true }),
+  getResult: (result: any) => {
+    // parse json string from result
+    const jsonString = result.content[0].text;
+    return JSON.parse(jsonString);
+  }
+};
 
 // Express API Routes
 app.get('/api/texts', (req: Request, res: Response) => {
@@ -84,6 +98,8 @@ app.post('/api/texts', async (req: Request, res: Response) => {
     id: Date.now(),
     text: text.trim(),
     timestamp: new Date().toISOString(),
+    fileName: '',
+    imageUrl: '',
   };
 
   // Send stage update for client creation
@@ -91,12 +107,24 @@ app.post('/api/texts', async (req: Request, res: Response) => {
 
   // TODO: Create a client using the `atxpClient` function for each ATXP MCP Server you want to use
   // For example, if you want to use the ATXP Image MCP Server, you can use the following code:
-  // const imageClient = await atxpClient({
-  //   mcpServer: imageService.mcpServer,
-  //   account: account,
-  //   allowedAuthorizationServers: ['http://localhost:3001', 'https://auth.atxp.ai'],
-  //   logger: new ConsoleLogger({level: LogLevel.DEBUG}),
-  // });
+
+  /**
+   * notes(struong)
+   * - pretty sure these clients will try to connect with the MCP servers before proceeding
+   */
+  const imageClient = await atxpClient({
+    mcpServer: imageService.mcpServer,
+    account: account,
+    allowedAuthorizationServers: ['http://localhost:3001', 'https://auth.atxp.ai'],
+    logger: new ConsoleLogger({level: LogLevel.DEBUG}),
+  });
+
+  const filestoreClient = await atxpClient({
+    mcpServer: filestoreService.mcpServer,
+    account: account,
+    allowedAuthorizationServers: ['http://localhost:3001', 'https://auth.atxp.ai'],
+    logger: new ConsoleLogger({level: LogLevel.DEBUG}),
+  });
 
   // Send stage update for just before the MCP tool call
   sendStageUpdate(requestId, 'calling-mcp-tool', 'Calling ATXP MCP tool...', 'in-progress');
@@ -104,32 +132,50 @@ app.post('/api/texts', async (req: Request, res: Response) => {
   try {
     // TODO: Call the MCP tool you want to use
     // For example, if you want to use the ATXP Image MCP Server, you can use the following code:
-    // const result = await imageClient.callTool({
-    //   name: imageService.toolName,
-    //   arguments: imageService.getArguments(text),
-    // });
+    const result = await imageClient.callTool({
+      name: imageService.toolName,
+      arguments: imageService.getArguments(text),
+    });
+    console.log(`${imageService.description} result success`);
+    // send stage update for image result success
+    sendStageUpdate(requestId, 'image-result-success', 'Image result success!', 'completed');
 
     // Send stage update for MCP tool call completion
     sendStageUpdate(requestId, 'mcp-tool-call-completed', 'ATXP MCP tool call completed!', 'completed');
 
     // TODO: Process the result of the MCP tool call
     // For example, if you want to use the ATXP Image MCP Server, you can use the following code:
-    // const imageResult = imageService.getResult(result);
-    // console.log('Result:', imageResult);
+    const imageResult = imageService.getResult(result);
+    console.log('Result:', imageResult);
 
-
+    sendStageUpdate(requestId, 'storing-file', 'Storing image in ATXP File Store...', 'in-progress');
     // TODO: If you want to use the result of the MCP tool call in another MCP tool call, you will need
     // a nested try/catch block wrapping the call to the next MCP tool.
+    try {
+      const result = await filestoreClient.callTool({
+        name: filestoreService.toolName,
+        arguments: filestoreService.getArguments(imageResult.url),
+      });
+      console.log(`${filestoreService.description} result success`);
+      
+      const fileResult = filestoreService.getResult(result);
+      newText.fileName = fileResult.fileName;
+      newText.imageUrl = fileResult.url;
+      
+      console.log('File result:', fileResult);
+      sendStageUpdate(requestId, 'filestore-result-success', 'File store result success!', 'completed');
 
-    // TODO: Save the result of the MCP tool call to the `newText` object
-    // For example, if you want to use the ATXP Image MCP Server, you can use the following code:
-    //newText.imageUrl = imageResult.url;
+      // Save the `newText` object to the `texts` array
+      texts.push(newText);
 
-    // Save the `newText` object to the `texts` array
-    texts.push(newText);
+      // Return the `newText` object to the frontend
+      res.status(201).json(newText);
 
-    // Return the `newText` object to the frontend
-    res.status(201).json(newText);
+    } catch (error) {
+      console.error(`Error with MCP tool call:`, error);
+      sendStageUpdate(requestId, 'filestore-result-error', 'Failed to call ATXP MCP tool!', 'error');
+      throw error;
+    }
   } catch (error) {
     console.error(`Error with MCP tool call:`, error);
 

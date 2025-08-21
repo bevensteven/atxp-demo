@@ -5,9 +5,12 @@ import './App.css';
 // Define the Text interface to match the Text interface in the backend
 // TODO: Update this interface to have the properties you need for your use case
 interface Text {
+  fileId: string;
   id: number;
   text: string;
   timestamp: string;
+  fileName: string;
+  imageUrl: string;
 }
 
 // Define the Stage interface for progress tracking
@@ -293,9 +296,23 @@ function App(): JSX.Element {
                 <div key={text.id} className="text-item">
                   <p className="text-content">{text.text}</p>
                   {/* TODO: Implement displaying the properties you need for your use case */}
+                  {text.imageUrl && (
+                    <figure>
+                      <img src={text.imageUrl} alt="Generated Image" className="text-image" />
+                      <figcaption>
+                        {text.fileName}
+                      </figcaption>
+                    </figure>
+                  )}
                   <small className="text-timestamp">
                     Submitted: {formatDate(text.timestamp)}
                   </small>
+
+                  {text.fileName && (
+                    <small className="text-fileId">
+                      File ID: {text.fileId}
+                    </small>
+                  )}
                 </div>
               ))}
             </div>
